@@ -507,4 +507,43 @@ class TestProviderDispatch:
             model="claude-sonnet-4-20250514", batch_size=10, provider="anthropic",
         )
         assert mock_anthropic.called
-        assert len(records) == 1
+
+    @patch("cp2077_translate.translator.translate_batch_anthropic")
+    def test_dedup_identical_variants(self, mock_anthropic):
+        """Identical femaleVariant/maleVariant should only be sent once to the API."""
+        mock_anthropic.return_value = ["translated"]
+        entries = [
+            TranslationEntry("f.json", "key", "1", "femaleVariant", "Hello"),
+            TranslationEntry("f.json", "key", "1", "maleVariant", "Hello"),
+        ]
+        records = translate_strings(
+            entries, "English", "Kazakh", "fake-key",
+            batch_size=10, provider="anthropic",
+        )
+        # API called with only 1 string, not 2
+        batch_arg = mock_anthropic.call_args[0][0]
+        assert len(batch_arg) == 1
+        assert batch_arg[0].field == "femaleVariant"
+        # But both records are produced
+        assert len(records) == 2
+        assert records[0].field == "femaleVariant"
+        assert records[0].translated_text == "translated"
+        assert records[1].field == "maleVariant"
+        assert records[1].translated_text == "translated"
+
+    @patch("cp2077_translate.translator.translate_batch_anthropic")
+    def test_no_dedup_when_variants_differ(self, mock_anthropic):
+        """Different femaleVariant/maleVariant should both be sent to the API."""
+        mock_anthropic.return_value = ["she said hi", "he said hi"]
+        entries = [
+            TranslationEntry("f.json", "key", "1", "femaleVariant", "She said hi"),
+            TranslationEntry("f.json", "key", "1", "maleVariant", "He said hi"),
+        ]
+        records = translate_strings(
+            entries, "English", "Kazakh", "fake-key",
+            batch_size=10, provider="anthropic",
+        )
+        # API called with both strings
+        batch_arg = mock_anthropic.call_args[0][0]
+        assert len(batch_arg) == 2
+        assert len(records) == 2

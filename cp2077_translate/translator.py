@@ -115,6 +115,7 @@ def _build_translation_prompt(
         "- Preserve all HTML/XML tags (e.g. <color>, </i>) exactly as they appear.",
         "- Preserve all {variable} placeholders (e.g. {player_name}) exactly as they appear.",
         "- Maintain the tone, register, and character voice of each line.",
+        "- femaleVariant is text shown for a female player character; maleVariant is for male. Adjust gendered grammar if the target language requires it.",
         "- The secondaryKey gives context about who is speaking and the scene.",
         "- Return ONLY a JSON array of translated strings, one per input, in the same order.",
         "- Do NOT include any explanation, markdown formatting, or code fences.",
@@ -369,9 +370,35 @@ def translate_strings(
         print("  All strings already translated (nothing to do).")
         return existing_records
 
-    logger.info("Translation plan: %d remaining, %d already done, batch_size=%d",
-                len(remaining), len(done_keys), batch_size)
-    print(f"  {len(remaining)} string(s) to translate ({len(done_keys)} already done)")
+    # Dedup identical variant pairs: when both femaleVariant and maleVariant
+    # have the same source text, only translate femaleVariant and copy the
+    # result to maleVariant. This saves API calls on non-gendered strings.
+    entry_groups: dict[tuple[str, str, str | None], dict[str, TranslationEntry]] = {}
+    for e in remaining:
+        entry_groups.setdefault((e.filepath, e.string_key, e.string_id), {})[e.field] = e
+
+    dedup_groups: set[tuple[str, str, str | None]] = set()
+    to_translate: list[TranslationEntry] = []
+    for group_key, fields in entry_groups.items():
+        female = fields.get("femaleVariant")
+        male = fields.get("maleVariant")
+        if female and male and female.source_text == male.source_text:
+            to_translate.append(female)
+            dedup_groups.add(group_key)
+        else:
+            for field_name in VARIANT_FIELDS:
+                if field_name in fields:
+                    to_translate.append(fields[field_name])
+
+    dedup_count = len(dedup_groups)
+    if dedup_count:
+        logger.info("Deduped %d identical variant pair(s), translating %d instead of %d",
+                     dedup_count, len(to_translate), len(remaining))
+        print(f"  {dedup_count} identical variant pair(s) deduped")
+
+    logger.info("Translation plan: %d to translate, %d already done, batch_size=%d",
+                len(to_translate), len(done_keys), batch_size)
+    print(f"  {len(to_translate)} string(s) to translate ({len(done_keys)} already done)")
 
     records = list(existing_records)
 
@@ -402,7 +429,7 @@ def translate_strings(
 
     # Process in batches
     max_retries = 3
-    batches = [remaining[i:i + batch_size] for i in range(0, len(remaining), batch_size)]
+    batches = [to_translate[i:i + batch_size] for i in range(0, len(to_translate), batch_size)]
 
     with Progress(
         TextColumn("  [bold]{task.description}"),
@@ -449,6 +476,17 @@ def translate_strings(
                     source_text=entry.source_text,
                     translated_text=translated,
                 ))
+                # Expand deduped variant: copy translation to the sibling
+                group_key = (entry.filepath, entry.string_key, entry.string_id)
+                if group_key in dedup_groups and entry.field == "femaleVariant":
+                    records.append(TranslationRecord(
+                        filepath=entry.filepath,
+                        string_key=entry.string_key,
+                        string_id=entry.string_id,
+                        field="maleVariant",
+                        source_text=entry.source_text,
+                        translated_text=translated,
+                    ))
 
             # Write incremental progress after each batch
             if resume_log:
