@@ -11,6 +11,8 @@ CLI toolchain that extracts localization text from Cyberpunk 2077 game archives,
 - **Resumable** -- interrupted translation runs pick up where they left off without re-translating completed batches
 - **Any language pair** -- configure source and target languages via config file or command-line flags
 
+> **Disclaimer:** This tool uses AI-generated translation -- mistakes, awkward phrasing, and outright errors will occur. It is not a substitute for professional localization. Additionally, this tool calls paid API services using your own API key. A full game translation can cost anywhere from ~$4 to $400+ depending on the model. You are solely responsible for any API charges you incur. See [Disclaimers](#disclaimers) for details.
+
 ## Prerequisites
 
 | Tool | Purpose | Where to get |
@@ -343,3 +345,9 @@ Open `output/translation_log.csv` and review the translations. If a specific bat
 - **UI overflow** -- some translations may be longer than the UI element allows. This is inherent to translation and affects high-visibility strings like menu items and tooltips.
 - **LLM quality** -- translation quality depends on the model and language pair. Review `translation_log.csv` for critical strings.
 - **Windows only** -- WolvenKit CLI requires Windows.
+
+## Disclaimers
+
+**Translation quality is not guaranteed.** This tool uses AI-generated translation, not human review. Mistakes, awkward phrasing, and outright errors will occur -- especially for less common language pairs or context-heavy dialogue. The output is meant as a starting point, not a polished localization. You can hand-edit `translation_log.csv` to fix bad translations and re-run with `--skip-extract --skip-translate` to apply corrections.
+
+**You are responsible for your own API costs.** This tool calls paid API services (Anthropic or OpenAI) using your API key. A full game translation can cost anywhere from ~$4 (gpt-4o-mini) to $400+ (claude-opus) depending on the model you choose. Always use `--extract-only` to preview string counts and `--limit` for small test runs before committing to a full translation. The author of this tool is not responsible for any API charges you incur.
