@@ -96,6 +96,9 @@ def translate(
     extract_only: bool = typer.Option(
         False, "--extract-only", help="Only extract strings to CSV, don't translate"
     ),
+    limit: Optional[int] = typer.Option(
+        None, "--limit", help="Only translate the first N strings (for testing)"
+    ),
 ) -> None:
     """Translate CP2077 localization files from one language to another.
 
@@ -169,12 +172,25 @@ def translate(
                f"Check that the game has the {src_lang} language pack installed.[/red]")
         raise typer.Exit(1)
 
+    # When --limit is set, only process a small number of files to speed up testing.
+    # We take enough files to likely yield at least N strings (1 file typically has many).
+    if limit is not None and limit > 0:
+        max_files = max(1, min(limit, len(json_files)))
+        json_files = json_files[:max_files]
+        rprint(f"  [yellow]--limit {limit}: processing first {len(json_files)} file(s) only[/yellow]")
+        logger.info("Limiting to first %d file(s) (--limit %d)", len(json_files), limit)
+
     # Step 2: Extract translatable strings
     rprint("[bold]Step 2: Extracting translatable strings...[/bold]")
     logger.info("Step 2: Extracting translatable strings from %d file(s)", len(json_files))
     entries = extract_strings(json_files)
     rprint(f"  Extracted {len(entries)} translatable string(s)")
     logger.info("Extracted %d translatable string(s)", len(entries))
+
+    if limit is not None and limit > 0 and len(entries) > limit:
+        entries = entries[:limit]
+        rprint(f"  [yellow]--limit {limit}: using first {len(entries)} string(s)[/yellow]")
+        logger.info("Capped to first %d string(s) (--limit)", len(entries))
 
     if extract_only:
         preview_records = [

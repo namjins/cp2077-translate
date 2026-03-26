@@ -148,20 +148,29 @@ def extract_locale_archives(config: Config, locale_code: str, locale_dir: str) -
     archives = find_locale_archives(config.game_dir, locale_code)
     logger.info("Unbundling %d archive(s) to %s", len(archives), extract_dir)
     unbundle_failures = 0
-    for archive in archives:
-        print(f"  Unbundling: {archive.name}")
-        logger.info("Unbundling: %s", archive)
-        cmd = [
-            str(config.wolvenkit_cli),
-            "unbundle",
-            "-p", str(archive),
-            "-o", str(extract_dir),
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            unbundle_failures += 1
-            logger.warning("WolvenKit unbundle failed for %s (exit %d): %s",
-                           archive.name, result.returncode, (result.stderr or "").strip()[:500])
+
+    with Progress(
+        TextColumn("  [bold]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeRemainingColumn(),
+    ) as progress:
+        task = progress.add_task("Unbundling archives", total=len(archives))
+
+        for archive in archives:
+            logger.info("Unbundling: %s", archive)
+            cmd = [
+                str(config.wolvenkit_cli),
+                "unbundle",
+                "-p", str(archive),
+                "-o", str(extract_dir),
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                unbundle_failures += 1
+                logger.warning("WolvenKit unbundle failed for %s (exit %d): %s",
+                               archive.name, result.returncode, (result.stderr or "").strip()[:500])
+            progress.advance(task)
 
     if unbundle_failures:
         logger.warning("Unbundle results: %d/%d failed", unbundle_failures, len(archives))

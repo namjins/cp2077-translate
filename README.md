@@ -30,16 +30,16 @@ CLI toolchain that extracts localization text from Cyberpunk 2077 game archives,
 git clone <repo-url>
 cd cp2077-translate
 python -m venv .venv
-.venv\Scripts\activate
-pip install -e .
-```
-
-To use the Anthropic Python SDK (recommended, enables connection reuse across batches):
-```powershell
+.venv\Scripts\Activate.ps1
 pip install -e ".[anthropic]"
 ```
 
-If you skip this, the pipeline falls back to raw HTTP requests automatically.
+> **"Scripts cannot be loaded" error?** Run this once first:
+> ```powershell
+> Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+> ```
+
+> **Anthropic SDK is optional.** If you omit `[anthropic]` from the install (`pip install -e .`), the pipeline falls back to raw HTTP requests automatically. The SDK is recommended because it reuses connections across batches.
 
 ### 2. Configure
 
@@ -69,7 +69,7 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 api_key = "sk-ant-..."
 
 # Option C: command-line flag
-cp2077-translate translate --config config.toml --api-key "sk-ant-..."
+cp2077-translate --config config.toml --api-key "sk-ant-..."
 ```
 
 ## Choosing Languages
@@ -96,7 +96,7 @@ source_locale = "en-us"
 Command-line flags override whatever is in `config.toml`:
 
 ```powershell
-cp2077-translate translate --config config.toml \
+cp2077-translate --config config.toml \
     --source-lang English --target-lang French --source-locale en-us
 ```
 
@@ -133,31 +133,37 @@ For other target languages, English (`en-us`) is usually the best source since L
 
 ```powershell
 # Activate venv (every new terminal session)
-.venv\Scripts\activate
+.venv\Scripts\Activate.ps1
 
 # Full pipeline: extract > translate > repack
-cp2077-translate translate --config config.toml
+cp2077-translate --config config.toml
 
 # Extract strings only (preview before spending API credits)
-cp2077-translate translate --config config.toml --extract-only
+cp2077-translate --config config.toml --extract-only
 
 # Resume an interrupted translation run (reuses extracted files)
-cp2077-translate translate --config config.toml --skip-extract
+cp2077-translate --config config.toml --skip-extract
 
 # Apply existing translations without re-translating
-cp2077-translate translate --config config.toml --skip-extract --skip-translate
+cp2077-translate --config config.toml --skip-extract --skip-translate
 
 # Translate only, skip archive repacking (for testing)
-cp2077-translate translate --config config.toml --skip-repack
+cp2077-translate --config config.toml --skip-repack
 
 # Override the LLM model
-cp2077-translate translate --config config.toml --model claude-sonnet-4-20250514
+cp2077-translate --config config.toml --model claude-sonnet-4-20250514
 
 # Smaller batch size (use if you hit token limits on long strings)
-cp2077-translate translate --config config.toml --batch-size 20
+cp2077-translate --config config.toml --batch-size 20
+
+# Test run: only translate 5 strings end-to-end
+cp2077-translate --config config.toml --limit 5
+
+# Fast re-test (skip extraction on subsequent runs)
+cp2077-translate --config config.toml --limit 5 --skip-extract
 
 # All options
-cp2077-translate translate --help
+cp2077-translate --help
 ```
 
 ### CLI Reference
@@ -175,6 +181,7 @@ cp2077-translate translate --help
 | `--skip-extract` | Skip archive extraction, reuse existing files |
 | `--skip-translate` | Skip translation, apply existing `translation_log.csv` |
 | `--skip-repack` | Skip repacking (translate but don't build archive) |
+| `--limit` | Only process the first N strings (for testing) |
 
 ## Pipeline Steps
 

@@ -210,6 +210,16 @@ class TestParseResponse:
         result = _parse_translation_response(response, 3)
         assert result == ["123", "True", "text"]
 
+    def test_raises_on_object_elements(self):
+        response = '[{"translation": "hello"}, "world"]'
+        with pytest.raises(ValueError, match="expected string"):
+            _parse_translation_response(response, 2)
+
+    def test_parses_when_llm_adds_trailing_text(self):
+        response = '["One", "Two"]\nNote: I preserved the [tags] as requested.'
+        result = _parse_translation_response(response, 2)
+        assert result == ["One", "Two"]
+
 
 # -- apply_translations ----------------------------------------------------
 

@@ -48,7 +48,7 @@ For a two-pass approach: translate everything with Sonnet, then re-translate mai
 To estimate cost before running:
 ```bash
 # Count total strings
-cp2077-translate translate --config config.toml --extract-only
+cp2077-translate --config config.toml --extract-only
 # Check output/translation_log.csv line count
 
 # Rough cost: ~50,000 strings × 40 per batch = 1,250 API calls
@@ -101,6 +101,6 @@ When asked to review translation quality:
 
 The pipeline saves progress after each batch to `translation_log.csv`. To resume:
 ```bash
-cp2077-translate translate --config config.toml --skip-extract
+cp2077-translate --config config.toml --skip-extract
 ```
 This loads the existing log, deduplicates by `(filepath, string_key, field)`, and only translates remaining strings.

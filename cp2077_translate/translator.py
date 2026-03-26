@@ -53,34 +53,45 @@ def extract_strings(json_files: list[Path]) -> list[TranslationEntry]:
     entries: list[TranslationEntry] = []
     skipped_files = 0
 
-    for filepath in json_files:
-        try:
-            with open(filepath, "r", encoding="utf-8-sig") as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            logger.warning("Skipping %s: %s", filepath.name, e)
-            skipped_files += 1
-            continue
+    with Progress(
+        TextColumn("  [bold]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeRemainingColumn(),
+    ) as progress:
+        task = progress.add_task("Extracting strings", total=len(json_files))
 
-        for entry in extract_entries(data):
-            if not isinstance(entry, dict):
+        for filepath in json_files:
+            try:
+                with open(filepath, "r", encoding="utf-8-sig") as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                logger.warning("Skipping %s: %s", filepath.name, e)
+                skipped_files += 1
+                progress.advance(task)
                 continue
 
-            entry_key = entry.get("secondaryKey", entry.get("$type", "unknown"))
-            string_id = entry.get("stringId")
-
-            for field_name in VARIANT_FIELDS:
-                value = entry.get(field_name)
-                if not isinstance(value, str) or not value.strip():
+            for entry in extract_entries(data):
+                if not isinstance(entry, dict):
                     continue
 
-                entries.append(TranslationEntry(
-                    filepath=str(filepath),
-                    string_key=str(entry_key),
-                    string_id=str(string_id) if string_id is not None else None,
-                    field=field_name,
-                    source_text=value,
-                ))
+                entry_key = entry.get("secondaryKey", entry.get("$type", "unknown"))
+                string_id = entry.get("stringId")
+
+                for field_name in VARIANT_FIELDS:
+                    value = entry.get(field_name)
+                    if not isinstance(value, str) or not value.strip():
+                        continue
+
+                    entries.append(TranslationEntry(
+                        filepath=str(filepath),
+                        string_key=str(entry_key),
+                        string_id=str(string_id) if string_id is not None else None,
+                        field=field_name,
+                        source_text=value,
+                    ))
+
+            progress.advance(task)
 
     logger.info("String extraction: %d entries from %d file(s) (%d file(s) skipped)",
                 len(entries), len(json_files) - skipped_files, skipped_files)
@@ -114,7 +125,7 @@ def _build_translation_prompt(
 
     for i, entry in enumerate(batch):
         lines.append(f'[{i}] (key: {entry.string_key}, field: {entry.field})')
-        lines.append(f'    "{entry.source_text}"')
+        lines.append(f'    {json.dumps(entry.source_text, ensure_ascii=False)}')
         lines.append("")
 
     lines.append(f"Return a JSON array of exactly {len(batch)} translated strings.")
@@ -141,13 +152,25 @@ def _parse_translation_response(response_text: str, expected_count: int) -> list
     if text.endswith("```"):
         text = text[:-3].rstrip()
 
-    # Handle preamble text before JSON array (e.g. "Here are the translations:\n[...]")
-    start = text.find("[")
-    end = text.rfind("]")
-    if start != -1 and end != -1 and start < end:
-        text = text[start:end + 1]
-
-    translations = json.loads(text)
+    # Try direct parse first; fall back to extracting the JSON array from surrounding text
+    try:
+        translations = json.loads(text)
+    except json.JSONDecodeError:
+        # Find the opening bracket and try closing brackets from the array end inward,
+        # in case the LLM added trailing text containing brackets (e.g. "[tags]").
+        start = text.find("[")
+        if start == -1:
+            raise
+        end = text.rfind("]")
+        while end > start:
+            try:
+                translations = json.loads(text[start:end + 1])
+                break
+            except json.JSONDecodeError:
+                end = text.rfind("]", start, end)
+        else:
+            # No valid JSON array found — re-raise the original error
+            translations = json.loads(text)
 
     if not isinstance(translations, list):
         raise ValueError(f"Expected JSON array, got {type(translations).__name__}")
@@ -157,7 +180,16 @@ def _parse_translation_response(response_text: str, expected_count: int) -> list
             f"Expected {expected_count} translations, got {len(translations)}"
         )
 
-    return [str(t) for t in translations]
+    # Validate each element is a scalar (string, number, bool), not a dict/list
+    result: list[str] = []
+    for i, t in enumerate(translations):
+        if isinstance(t, (dict, list)):
+            raise ValueError(
+                f"Translation [{i}] is {type(t).__name__}, expected string"
+            )
+        result.append(str(t))
+
+    return result
 
 
 def translate_batch_anthropic(
@@ -293,7 +325,7 @@ def translate_strings(
             f"Translating ({len(batches)} batches)", total=len(batches)
         )
 
-        for batch in batches:
+        for batch_idx, batch in enumerate(batches):
             translations = None
             for attempt in range(1, max_retries + 1):
                 try:
@@ -317,7 +349,7 @@ def translate_strings(
                 break
 
             logger.debug("Batch %d/%d complete: %d string(s) translated",
-                         batches.index(batch) + 1, len(batches), len(translations))
+                         batch_idx + 1, len(batches), len(translations))
 
             for entry, translated in zip(batch, translations):
                 records.append(TranslationRecord(
@@ -359,39 +391,49 @@ def apply_translations(
     updated_count = 0
     modified_file_count = 0
 
-    for filepath in json_files:
-        with open(filepath, "r", encoding="utf-8-sig") as f:
-            data = json.load(f)
+    with Progress(
+        TextColumn("  [bold]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeRemainingColumn(),
+    ) as progress:
+        task = progress.add_task("Applying translations", total=len(json_files))
 
-        entries = extract_entries(data)
-        modified = False
+        for filepath in json_files:
+            with open(filepath, "r", encoding="utf-8-sig") as f:
+                data = json.load(f)
 
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
+            entries = extract_entries(data)
+            modified = False
 
-            entry_key = str(entry.get("secondaryKey", entry.get("$type", "unknown")))
-            string_id = entry.get("stringId")
-            sid = str(string_id) if string_id is not None else None
-            fp_str = str(filepath)
-
-            for field_name in VARIANT_FIELDS:
-                value = entry.get(field_name)
-                if not isinstance(value, str) or not value.strip():
+            for entry in entries:
+                if not isinstance(entry, dict):
                     continue
 
-                key = (fp_str, entry_key, sid, field_name)
-                if key in lookup:
-                    entry[field_name] = lookup[key]
-                    modified = True
-                    updated_count += 1
+                entry_key = str(entry.get("secondaryKey", entry.get("$type", "unknown")))
+                string_id = entry.get("stringId")
+                sid = str(string_id) if string_id is not None else None
+                fp_str = str(filepath)
 
-        if modified:
-            serialized = json.dumps(data, ensure_ascii=False, indent=2)
-            json.loads(serialized)  # sanity check round-trip
-            with atomic_write(filepath, encoding="utf-8") as f:
-                f.write(serialized)
-            modified_file_count += 1
+                for field_name in VARIANT_FIELDS:
+                    value = entry.get(field_name)
+                    if not isinstance(value, str) or not value.strip():
+                        continue
+
+                    key = (fp_str, entry_key, sid, field_name)
+                    if key in lookup:
+                        entry[field_name] = lookup[key]
+                        modified = True
+                        updated_count += 1
+
+            if modified:
+                serialized = json.dumps(data, ensure_ascii=False, indent=2)
+                json.loads(serialized)  # sanity check round-trip
+                with atomic_write(filepath, encoding="utf-8") as f:
+                    f.write(serialized)
+                modified_file_count += 1
+
+            progress.advance(task)
 
     logger.info("Apply complete: %d string(s) updated across %d file(s)",
                 updated_count, modified_file_count)
