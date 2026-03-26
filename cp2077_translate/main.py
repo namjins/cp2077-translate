@@ -24,6 +24,25 @@ from .translator import (
 
 logger = logging.getLogger(__name__)
 
+# Known model prefixes per provider, used for auto-correction
+_ANTHROPIC_PREFIXES = ("claude",)
+_OPENAI_PREFIXES = ("gpt", "o1", "o3", "o4")
+
+
+def resolve_model(provider: str, model: str) -> str:
+    """Auto-correct the model if it clearly belongs to a different provider.
+
+    Returns the model unchanged if it already matches the provider, or a
+    sensible default for the target provider if it doesn't.
+    """
+    if provider == "openai" and model.startswith(_ANTHROPIC_PREFIXES):
+        logger.info("Auto-selected model gpt-4o for provider openai (was %s)", model)
+        return "gpt-4o"
+    if provider == "anthropic" and model.startswith(_OPENAI_PREFIXES):
+        logger.info("Auto-selected model claude-sonnet-4-20250514 for provider anthropic (was %s)", model)
+        return "claude-sonnet-4-20250514"
+    return model
+
 
 def _setup_logging(output_dir: Path, level: int = logging.INFO) -> str:
     """Configure file logging for pipeline runs. Returns the run ID."""
@@ -75,8 +94,11 @@ def translate(
     source_locale: Optional[str] = typer.Option(
         None, "--source-locale", help="Source locale directory (e.g. 'tr-tr')"
     ),
+    provider: Optional[str] = typer.Option(
+        None, "--provider", help="API provider: 'anthropic' or 'openai'"
+    ),
     api_key: Optional[str] = typer.Option(
-        None, "--api-key", help="Anthropic API key (or set ANTHROPIC_API_KEY env var)"
+        None, "--api-key", help="API key (or set ANTHROPIC_API_KEY / OPENAI_API_KEY env var)"
     ),
     model: Optional[str] = typer.Option(
         None, "--model", help="LLM model to use for translation"
@@ -120,11 +142,16 @@ def translate(
     run_id = _setup_logging(config.output_dir)
 
     # Apply CLI overrides
+    effective_provider = provider or config.provider
+    if effective_provider not in ("anthropic", "openai"):
+        rprint(f"[red]Error: provider must be 'anthropic' or 'openai', got '{effective_provider}'[/red]")
+        raise typer.Exit(1)
     src_lang = source_lang or config.source_lang
     tgt_lang = target_lang or config.target_lang
     src_locale = source_locale or config.source_locale
-    effective_api_key = api_key or config.api_key or os.environ.get("ANTHROPIC_API_KEY")
-    effective_model = model or config.model
+    env_key_var = "OPENAI_API_KEY" if effective_provider == "openai" else "ANTHROPIC_API_KEY"
+    effective_api_key = api_key or config.api_key or os.environ.get(env_key_var)
+    effective_model = resolve_model(effective_provider, model or config.model)
     effective_batch_size = batch_size or config.batch_size
 
     # Derive locale code from locale dir (e.g. "tr-tr" -> "tr")
@@ -134,8 +161,9 @@ def translate(
 
     rprint(f"[bold]Translation pipeline: {src_lang} → {tgt_lang}[/bold]")
     rprint(f"  Source locale: {src_locale} (archive prefix: lang_{locale_code})")
-    logger.info("Translation pipeline: %s -> %s, locale=%s, model=%s, batch_size=%d",
-                src_lang, tgt_lang, src_locale, effective_model, effective_batch_size)
+    rprint(f"  Provider: {effective_provider}, model: {effective_model}")
+    logger.info("Translation pipeline: %s -> %s, locale=%s, provider=%s, model=%s, batch_size=%d",
+                src_lang, tgt_lang, src_locale, effective_provider, effective_model, effective_batch_size)
     logger.info("Config: game_dir=%s, work_dir=%s, output_dir=%s",
                 config.game_dir, config.work_dir, config.output_dir)
 
@@ -220,9 +248,9 @@ def translate(
         logger.info("Loaded %d translation(s) from %s", len(records), log_path)
     else:
         if not effective_api_key:
-            logger.error("No API key provided")
-            rprint("[red]Error: No API key provided. Set ANTHROPIC_API_KEY env var, "
-                   "pass --api-key, or set api_key in config.toml [translation].[/red]")
+            logger.error("No API key provided for %s", effective_provider)
+            rprint(f"[red]Error: No API key provided. Set {env_key_var} env var, "
+                   f"pass --api-key, or set api_key in config.toml [translation].[/red]")
             raise typer.Exit(1)
 
         rprint(f"[bold]Step 3: Translating {len(entries)} strings ({src_lang} → {tgt_lang})...[/bold]")
@@ -232,10 +260,15 @@ def translate(
             entries, src_lang, tgt_lang,
             effective_api_key, effective_model, effective_batch_size,
             resume_log=log_path,
+            provider=effective_provider,
         )
-        write_translation_log(records, log_path)
-        logger.info("Translation complete: %d record(s) saved to %s", len(records), log_path)
-        rprint(f"  Translation log saved to {log_path}")
+        if records:
+            write_translation_log(records, log_path)
+            logger.info("Translation complete: %d record(s) saved to %s", len(records), log_path)
+            rprint(f"  Translation log saved to {log_path}")
+        else:
+            logger.warning("Translation produced 0 records; log not written")
+            rprint("[yellow]  Warning: translation produced 0 records.[/yellow]")
 
     # Step 4: Apply translations to JSON files
     rprint("[bold]Step 4: Applying translations to locale files...[/bold]")
@@ -244,6 +277,13 @@ def translate(
     updated = apply_translations(json_files, records)
     rprint(f"  Updated {updated} string(s) in locale files")
     logger.info("Applied translations: %d string(s) updated", updated)
+
+    if updated == 0 and not skip_repack:
+        logger.error("Aborting repack: 0 translations applied — output archive would be untranslated")
+        rprint("[red]Error: 0 translations were applied to locale files. "
+               "Repacking would produce an untranslated archive. "
+               "Check that translation_log.csv contains records and re-run.[/red]")
+        raise typer.Exit(1)
 
     if skip_repack:
         rprint("[yellow]Skipping repack.[/yellow]")

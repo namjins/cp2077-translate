@@ -21,13 +21,15 @@ description = "Kazakh translation of Cyberpunk 2077 localization"
 workers = 8
 
 [translation]
+# API provider: "anthropic" or "openai"
+provider = "anthropic"
 # Source language name (used in LLM prompt for context)
 source_lang = "Turkish"
 # Target language name (used in LLM prompt for context)
 target_lang = "Kazakh"
 # Source locale directory name in extracted archives (e.g. "tr-tr", "en-us", "ru-ru")
 source_locale = "tr-tr"
-# Anthropic API key — can also be set via ANTHROPIC_API_KEY environment variable
+# API key — can also be set via ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable
 # api_key = "sk-ant-..."
 # LLM model to use for translation
 model = "claude-sonnet-4-20250514"

@@ -17,6 +17,7 @@ class TestConfigValidation:
         cfg = Config()
         assert cfg.workers == 8
         assert cfg.batch_size == 40
+        assert cfg.provider == "anthropic"
         assert cfg.source_lang == "Turkish"
         assert cfg.target_lang == "Kazakh"
         assert cfg.source_locale == "tr-tr"
@@ -54,6 +55,27 @@ batch_size = 20
         config_file = tmp_path / "config.toml"
         config_file.write_text(toml)
         with pytest.raises(ValueError, match="workers"):
+            load_config(config_file)
+
+    def test_valid_provider_openai(self, tmp_path):
+        toml = '[translation]\nprovider = "openai"\n'
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(toml)
+        cfg = load_config(config_file)
+        assert cfg.provider == "openai"
+
+    def test_invalid_provider_raises(self, tmp_path):
+        toml = '[translation]\nprovider = "azure"\n'
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(toml)
+        with pytest.raises(ValueError, match="provider"):
+            load_config(config_file)
+
+    def test_batch_size_zero_raises(self, tmp_path):
+        toml = "[translation]\nbatch_size = 0\n"
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(toml)
+        with pytest.raises(ValueError, match="batch_size"):
             load_config(config_file)
 
     def test_missing_config_file_raises(self):

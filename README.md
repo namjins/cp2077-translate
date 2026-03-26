@@ -1,11 +1,11 @@
 # CP2077 Translation Pipeline
 
-CLI toolchain that extracts localization text from Cyberpunk 2077 game archives, translates it to another language using an LLM API (Claude), and repacks the result as an installable mod.
+CLI toolchain that extracts localization text from Cyberpunk 2077 game archives, translates it to another language using an LLM API (Anthropic Claude or OpenAI GPT), and repacks the result as an installable mod.
 
 ## What This Does
 
 - **Extracts** all translatable strings (subtitles, dialogue, UI text) from any supported source locale
-- **Translates** via Claude API in batches, preserving character tone, markup tags, and variable placeholders
+- **Translates** via Anthropic or OpenAI API in batches, preserving character tone, markup tags, and variable placeholders
 - **Repacks** translated text into a game-ready `.archive` mod you can drop into your game
 - Covers both the **base game** and **Phantom Liberty** expansion
 - **Resumable** -- interrupted translation runs pick up where they left off without re-translating completed batches
@@ -17,7 +17,7 @@ CLI toolchain that extracts localization text from Cyberpunk 2077 game archives,
 |------|---------|--------------|
 | **Python 3.11+** | Runs the pipeline | [python.org](https://www.python.org/downloads/) |
 | **WolvenKit CLI** | Extracts and repacks CP2077 `.archive` files | [GitHub Releases](https://github.com/WolvenKit/WolvenKit/releases) |
-| **Anthropic API key** | Powers the LLM translation | [console.anthropic.com](https://console.anthropic.com/) |
+| **API key** (Anthropic or OpenAI) | Powers the LLM translation | [console.anthropic.com](https://console.anthropic.com/) or [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
 | **Cyberpunk 2077** | Must have the source language pack installed | Steam/GOG/Epic game settings |
 
 > **Windows required.** WolvenKit CLI is Windows-only, so the pipeline must run on Windows.
@@ -32,6 +32,8 @@ cd cp2077-translate
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -e ".[anthropic]"
+# Or, for OpenAI:
+pip install -e ".[openai]"
 ```
 
 > **"Scripts cannot be loaded" error?** Run this once first:
@@ -39,7 +41,7 @@ pip install -e ".[anthropic]"
 > Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 > ```
 
-> **Anthropic SDK is optional.** If you omit `[anthropic]` from the install (`pip install -e .`), the pipeline falls back to raw HTTP requests automatically. The SDK is recommended because it reuses connections across batches.
+> **Provider SDKs are optional.** If you omit `[anthropic]` or `[openai]` from the install (`pip install -e .`), the pipeline falls back to raw HTTP requests automatically. The SDK is recommended because it reuses connections across batches.
 
 ### 2. Configure
 
@@ -63,7 +65,8 @@ Pick one method:
 
 ```powershell
 # Option A: environment variable (recommended -- keeps keys out of files)
-$env:ANTHROPIC_API_KEY = "sk-ant-..."
+$env:ANTHROPIC_API_KEY = "sk-ant-..."   # for Anthropic
+$env:OPENAI_API_KEY = "sk-..."          # for OpenAI
 
 # Option B: in config.toml under [translation]
 api_key = "sk-ant-..."
@@ -71,6 +74,8 @@ api_key = "sk-ant-..."
 # Option C: command-line flag
 cp2077-translate --config config.toml --api-key "sk-ant-..."
 ```
+
+The pipeline auto-detects the correct env var based on your `provider` setting.
 
 ## Choosing Languages
 
@@ -153,6 +158,9 @@ cp2077-translate --config config.toml --skip-repack
 # Override the LLM model
 cp2077-translate --config config.toml --model claude-sonnet-4-20250514
 
+# Use OpenAI instead of Anthropic
+cp2077-translate --config config.toml --provider openai --model gpt-4o
+
 # Smaller batch size (use if you hit token limits on long strings)
 cp2077-translate --config config.toml --batch-size 20
 
@@ -171,11 +179,12 @@ cp2077-translate --help
 | Flag | Description |
 |------|-------------|
 | `--config`, `-c` | Path to `config.toml` (required) |
+| `--provider` | API provider: `anthropic` (default) or `openai` |
 | `--source-lang` | Source language name, overrides config |
 | `--target-lang` | Target language name, overrides config |
 | `--source-locale` | Source locale directory, overrides config |
-| `--api-key` | Anthropic API key, overrides config and env var |
-| `--model` | LLM model name, overrides config |
+| `--api-key` | API key, overrides config and env var |
+| `--model` | LLM model name, overrides config (auto-corrected if mismatched with provider) |
 | `--batch-size` | Strings per API call, overrides config |
 | `--extract-only` | Extract strings to CSV and stop (no API calls) |
 | `--skip-extract` | Skip archive extraction, reuse existing files |
@@ -189,7 +198,7 @@ cp2077-translate --help
 |------|-------------|
 | **1. Extract** | Finds and unpacks the source locale archive (e.g. `lang_tr_text.archive`) via WolvenKit CLI, then converts CR2W binary files to human-readable JSON |
 | **2. Extract strings** | Walks the JSON files and collects every `femaleVariant` and `maleVariant` dialogue string with its metadata |
-| **3. Translate** | Sends strings to the Claude API in configurable batches with dialogue context (speaker, scene); saves progress to `translation_log.csv` after each batch |
+| **3. Translate** | Sends strings to the LLM API (Anthropic or OpenAI) in configurable batches with dialogue context (speaker, scene); saves progress to `translation_log.csv` after each batch |
 | **4. Apply** | Writes translated strings back into the JSON files, replacing the originals |
 | **5. Repack** | Converts the patched JSON files back to CR2W binary, then packs everything into a `.archive` mod file |
 
@@ -263,15 +272,17 @@ description = "Kazakh translation of Cyberpunk 2077 localization"
 workers = 8
 
 [translation]
+# API provider: "anthropic" (default) or "openai"
+provider = "anthropic"
 # Source language name (human-readable, used in the LLM translation prompt)
 source_lang = "Turkish"
 # Target language name (human-readable, used in the LLM translation prompt)
 target_lang = "Kazakh"
 # Source locale directory in extracted archives (must match the game's locale code)
 source_locale = "tr-tr"
-# Anthropic API key (can also be set via ANTHROPIC_API_KEY env var or --api-key flag)
+# API key (can also be set via ANTHROPIC_API_KEY or OPENAI_API_KEY env var, or --api-key flag)
 # api_key = "sk-ant-..."
-# LLM model for translation
+# LLM model for translation (auto-corrected if mismatched with provider)
 model = "claude-sonnet-4-20250514"
 # Number of strings per API call (lower = safer for long strings, higher = fewer API calls)
 batch_size = 40

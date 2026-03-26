@@ -66,7 +66,7 @@ def extract_strings(json_files: list[Path]) -> list[TranslationEntry]:
                 with open(filepath, "r", encoding="utf-8-sig") as f:
                     data = json.load(f)
             except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                logger.warning("Skipping %s: %s", filepath.name, e)
+                logger.warning("Skipping %s: %s", filepath, e)
                 skipped_files += 1
                 progress.advance(task)
                 continue
@@ -261,6 +261,78 @@ def translate_batch_anthropic(
     return _parse_translation_response(response_text, len(batch))
 
 
+def translate_batch_openai(
+    batch: list[TranslationEntry],
+    source_lang: str,
+    target_lang: str,
+    api_key: str,
+    model: str = "gpt-4o",
+    client: object | None = None,
+) -> list[str]:
+    """Translate a batch of strings using the OpenAI Chat Completions API.
+
+    Uses the openai SDK if available, otherwise falls back to direct HTTP.
+    An optional pre-built ``client`` avoids re-creating connections per batch.
+    """
+    prompt = _build_translation_prompt(batch, source_lang, target_lang)
+
+    try:
+        import openai
+        if client is None:
+            client = openai.OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=model,
+            max_completion_tokens=8192,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        if response.choices[0].finish_reason == "length":
+            raise ValueError(
+                "Response truncated (hit max_tokens). "
+                "Try reducing batch_size in config.toml."
+            )
+        response_text = response.choices[0].message.content
+        if response_text is None:
+            raise ValueError("OpenAI returned empty content (possible refusal)")
+    except ImportError:
+        import urllib.request
+        import urllib.error
+
+        request_body = json.dumps({
+            "model": model,
+            "max_completion_tokens": 8192,
+            "messages": [{"role": "user", "content": prompt}],
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/chat/completions",
+            data=request_body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                resp_data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"OpenAI API error {e.code}: {body}"
+            ) from e
+
+        if resp_data["choices"][0].get("finish_reason") == "length":
+            raise ValueError(
+                "Response truncated (hit max_tokens). "
+                "Try reducing batch_size in config.toml."
+            )
+        response_text = resp_data["choices"][0]["message"]["content"]
+        if response_text is None:
+            raise ValueError("OpenAI returned empty content (possible refusal)")
+
+    return _parse_translation_response(response_text, len(batch))
+
+
 def translate_strings(
     entries: list[TranslationEntry],
     source_lang: str,
@@ -269,6 +341,7 @@ def translate_strings(
     model: str = "claude-sonnet-4-20250514",
     batch_size: int = DEFAULT_BATCH_SIZE,
     resume_log: Path | None = None,
+    provider: str = "anthropic",
 ) -> list[TranslationRecord]:
     """Translate all extracted strings in batches via an LLM API.
 
@@ -304,12 +377,28 @@ def translate_strings(
 
     # Build a reusable API client if the SDK is available
     api_client = None
-    try:
-        import anthropic
-        api_client = anthropic.Anthropic(api_key=api_key)
-        logger.debug("Using anthropic SDK for API calls")
-    except ImportError:
-        logger.debug("anthropic SDK not available, using urllib fallback")
+    if provider == "anthropic":
+        try:
+            import anthropic
+            api_client = anthropic.Anthropic(api_key=api_key)
+            logger.debug("Using anthropic SDK for API calls")
+        except ImportError:
+            logger.debug("anthropic SDK not available, using urllib fallback")
+    elif provider == "openai":
+        try:
+            import openai
+            api_client = openai.OpenAI(api_key=api_key)
+            logger.debug("Using openai SDK for API calls")
+        except ImportError:
+            logger.debug("openai SDK not available, using urllib fallback")
+
+    # Select the batch translation function for this provider
+    if provider == "openai":
+        batch_fn = translate_batch_openai
+    elif provider == "anthropic":
+        batch_fn = translate_batch_anthropic
+    else:
+        raise ValueError(f"Unknown provider: {provider!r}")
 
     # Process in batches
     max_retries = 3
@@ -329,7 +418,7 @@ def translate_strings(
             translations = None
             for attempt in range(1, max_retries + 1):
                 try:
-                    translations = translate_batch_anthropic(
+                    translations = batch_fn(
                         batch, source_lang, target_lang, api_key, model,
                         client=api_client,
                     )

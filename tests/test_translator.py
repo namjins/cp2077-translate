@@ -1,5 +1,6 @@
 """Tests for translator.py: string extraction, prompt building, response parsing, and log I/O."""
 
+import inspect
 import json
 import pytest
 from pathlib import Path
@@ -12,9 +13,13 @@ from cp2077_translate.translator import (
     apply_translations,
     write_translation_log,
     load_translation_log,
+    translate_batch_anthropic,
+    translate_batch_openai,
+    translate_strings,
     _build_translation_prompt,
     _parse_translation_response,
 )
+from cp2077_translate.main import resolve_model
 
 
 def _make_locale_json(entries):
@@ -425,3 +430,81 @@ class TestTranslationLog:
         log_path.write_text("filepath,string_key\nfoo,bar\n", encoding="utf-8")
         with pytest.raises(ValueError, match="missing columns"):
             load_translation_log(log_path)
+
+
+# -- resolve_model ------------------------------------------------------------
+
+class TestResolveModel:
+    def test_claude_model_unchanged_for_anthropic(self):
+        assert resolve_model("anthropic", "claude-sonnet-4-20250514") == "claude-sonnet-4-20250514"
+
+    def test_gpt_model_unchanged_for_openai(self):
+        assert resolve_model("openai", "gpt-4o") == "gpt-4o"
+
+    def test_claude_model_corrected_for_openai(self):
+        assert resolve_model("openai", "claude-sonnet-4-20250514") == "gpt-4o"
+
+    def test_gpt_model_corrected_for_anthropic(self):
+        assert resolve_model("anthropic", "gpt-4o") == "claude-sonnet-4-20250514"
+
+    def test_o1_model_corrected_for_anthropic(self):
+        assert resolve_model("anthropic", "o1-preview") == "claude-sonnet-4-20250514"
+
+    def test_o3_model_corrected_for_anthropic(self):
+        assert resolve_model("anthropic", "o3-mini") == "claude-sonnet-4-20250514"
+
+    def test_unknown_model_passed_through(self):
+        """Models that don't match known prefixes are left as-is."""
+        assert resolve_model("openai", "my-custom-model") == "my-custom-model"
+        assert resolve_model("anthropic", "my-custom-model") == "my-custom-model"
+
+
+# -- translate_batch_openai interface parity -----------------------------------
+
+class TestBatchFunctionParity:
+    def test_openai_and_anthropic_have_same_parameters(self):
+        """Both batch functions should accept the same parameter names."""
+        anthropic_params = set(inspect.signature(translate_batch_anthropic).parameters.keys())
+        openai_params = set(inspect.signature(translate_batch_openai).parameters.keys())
+        assert anthropic_params == openai_params
+
+
+# -- translate_strings provider dispatch ---------------------------------------
+
+class TestProviderDispatch:
+    def test_unknown_provider_raises(self):
+        entries = [
+            TranslationEntry("f.json", "key", "1", "femaleVariant", "hello"),
+        ]
+        with pytest.raises(ValueError, match="Unknown provider"):
+            translate_strings(
+                entries, "English", "Kazakh", "fake-key",
+                provider="azure",
+            )
+
+    @patch("cp2077_translate.translator.translate_batch_openai")
+    def test_dispatches_to_openai(self, mock_openai):
+        mock_openai.return_value = ["translated"]
+        entries = [
+            TranslationEntry("f.json", "key", "1", "femaleVariant", "hello"),
+        ]
+        records = translate_strings(
+            entries, "English", "Kazakh", "fake-key",
+            model="gpt-4o", batch_size=10, provider="openai",
+        )
+        assert mock_openai.called
+        assert len(records) == 1
+        assert records[0].translated_text == "translated"
+
+    @patch("cp2077_translate.translator.translate_batch_anthropic")
+    def test_dispatches_to_anthropic(self, mock_anthropic):
+        mock_anthropic.return_value = ["translated"]
+        entries = [
+            TranslationEntry("f.json", "key", "1", "femaleVariant", "hello"),
+        ]
+        records = translate_strings(
+            entries, "English", "Kazakh", "fake-key",
+            model="claude-sonnet-4-20250514", batch_size=10, provider="anthropic",
+        )
+        assert mock_anthropic.called
+        assert len(records) == 1

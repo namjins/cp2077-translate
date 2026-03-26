@@ -18,10 +18,11 @@ class Config:
     mod_description: str = "Translates CP2077 localization to another language"
     workers: int = 8
     # Translation settings
+    provider: str = "anthropic"  # "anthropic" or "openai"
     source_lang: str = "Turkish"
     target_lang: str = "Kazakh"
     source_locale: str = "tr-tr"  # locale dir name in extracted archives
-    api_key: str | None = None  # Anthropic API key (or use ANTHROPIC_API_KEY env var)
+    api_key: str | None = None  # API key (or use ANTHROPIC_API_KEY / OPENAI_API_KEY env var)
     model: str = "claude-sonnet-4-20250514"
     batch_size: int = 40
 
@@ -72,6 +73,8 @@ def load_config(config_path: Path | None = None, **overrides: str) -> Config:
             cfg.workers = int(perf["workers"])
 
         translation = data.get("translation", {})
+        if "provider" in translation:
+            cfg.provider = translation["provider"]
         if "source_lang" in translation:
             cfg.source_lang = translation["source_lang"]
         if "target_lang" in translation:
@@ -95,7 +98,9 @@ def load_config(config_path: Path | None = None, **overrides: str) -> Config:
     if "output_dir" in overrides and overrides["output_dir"]:
         cfg.output_dir = Path(overrides["output_dir"])
 
-    # Validate numeric ranges
+    # Validate settings
+    if cfg.provider not in ("anthropic", "openai"):
+        raise ValueError(f"provider must be 'anthropic' or 'openai', got '{cfg.provider}'")
     if cfg.workers < 1 or cfg.workers > 64:
         raise ValueError(f"workers must be 1-64, got {cfg.workers}")
     if cfg.batch_size < 1:
