@@ -1,0 +1,23 @@
+# Virtual environment
+.venv/
+
+# Python build artifacts
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+dist/
+build/
+
+# Runtime working directories (contain game files)
+work/
+output/
+
+# User config (contains local paths and API keys)
+config.toml
+
+# macOS
+.DS_Store
+
+# Claude Code local settings
+.claude/settings.local.json

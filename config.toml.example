@@ -1,0 +1,35 @@
+[wolvenkit]
+# Path to WolvenKit CLI executable
+cli_path = "C:\\Tools\\WolvenKit\\WolvenKit.CLI.exe"
+
+[paths]
+# Path to Cyberpunk 2077 game directory
+game_dir = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Cyberpunk 2077"
+# Working directory for extracted files
+work_dir = "./work"
+# Output directory for translation log and final mod package
+output_dir = "./output"
+
+[mod]
+# Mod metadata
+name = "CP2077KazakhTranslation"
+version = "1.0.0"
+description = "Kazakh translation of Cyberpunk 2077 localization"
+
+[performance]
+# Number of parallel workers for CR2W conversion (cr2w -s and cr2w -d)
+workers = 8
+
+[translation]
+# Source language name (used in LLM prompt for context)
+source_lang = "Turkish"
+# Target language name (used in LLM prompt for context)
+target_lang = "Kazakh"
+# Source locale directory name in extracted archives (e.g. "tr-tr", "en-us", "ru-ru")
+source_locale = "tr-tr"
+# Anthropic API key — can also be set via ANTHROPIC_API_KEY environment variable
+# api_key = "sk-ant-..."
+# LLM model to use for translation
+model = "claude-sonnet-4-20250514"
+# Number of strings to send per API call (higher = fewer calls but larger payloads)
+batch_size = 40
