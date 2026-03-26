@@ -27,8 +27,12 @@ def convert_json_to_cr2w(config: Config, extract_dir: Path, modified_files: set[
         json_json_files = [f for f in json_json_files if f.resolve() in modified_files]
 
     if not json_json_files:
+        logger.warning("No .json.json files found to deserialize in %s", extract_dir)
         print("  Warning: no .json.json files found to deserialize.")
         return
+
+    logger.info("Deserializing %d .json.json file(s) to CR2W (%d workers)",
+                len(json_json_files), config.workers)
 
     def _deserialize_one(jj_file: Path) -> bool:
         cmd = [str(config.wolvenkit_cli), "cr2w", "-d", str(jj_file)]
@@ -59,9 +63,11 @@ def convert_json_to_cr2w(config: Config, extract_dir: Path, modified_files: set[
                     failed_count += 1
                 progress.advance(task)
 
+    total = len(json_json_files)
+    logger.info("CR2W deserialization complete: %d/%d succeeded", total - failed_count, total)
     if failed_count:
-        total = len(json_json_files)
         pct = (failed_count / total) * 100 if total else 0
+        logger.warning("CR2W deserialization: %d/%d failed (%.1f%%)", failed_count, total, pct)
         print(f"  Warning: {failed_count}/{total} CR2W deserialization(s) failed ({pct:.1f}%)")
         if pct > 10:
             raise RuntimeError(
@@ -102,12 +108,14 @@ def repack_archives(config: Config, patch_records: list | None = None) -> Path:
                 modified_files.add(Path(r.filepath).resolve())
             except (OSError, ValueError):
                 # If the path can't be resolved (e.g., file was deleted), skip it
+                logger.warning("Cannot resolve patch record path: %s", r.filepath)
                 print(f"  Warning: cannot resolve patch record path: {r.filepath}")
 
     # Step 1: deserialize patched .json.json -> CR2W .json
     convert_json_to_cr2w(config, extract_dir, modified_files)
 
     # Step 2: pack -- output lands next to the input folder (WolvenKit behaviour)
+    logger.info("Packing archive from: %s", extract_dir)
     print(f"  Repacking from: {extract_dir}")
     cmd = [
         str(config.wolvenkit_cli),
@@ -128,15 +136,18 @@ def repack_archives(config: Config, patch_records: list | None = None) -> Path:
                     progress.advance(task)
             proc.wait()
         if proc.returncode != 0:
+            logger.error("WolvenKit pack failed (exit %d)", proc.returncode)
             raise RuntimeError(f"WolvenKit pack failed (exit {proc.returncode})")
 
     # WolvenKit places the .archive alongside the input folder
     packed_dir = extract_dir.parent
     archives = list(packed_dir.glob("*.archive"))
     if not archives:
+        logger.error("WolvenKit pack succeeded but no .archive found in %s", packed_dir)
         raise RuntimeError(
             f"WolvenKit pack succeeded but no .archive found in {packed_dir}"
         )
 
+    logger.info("Repacked %d archive(s): %s", len(archives), [a.name for a in archives])
     print(f"  Repacked archive(s): {[a.name for a in archives]}")
     return packed_dir

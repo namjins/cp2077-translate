@@ -1,4 +1,4 @@
-"""Safe file I/O utilities for the profanity filter pipeline."""
+"""Safe file I/O utilities for the CP2077 translation pipeline."""
 
 import os
 import tempfile

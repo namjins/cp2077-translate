@@ -2,7 +2,6 @@
 
 import logging
 import os
-import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
@@ -13,7 +12,7 @@ from rich import print as rprint
 
 from .config import load_config, validate_tool_paths
 from .extractor import collect_locale_jsons, extract_locale_archives
-from .repacker import convert_json_to_cr2w
+from .repacker import repack_archives
 from .translator import (
     apply_translations,
     extract_strings,
@@ -132,39 +131,50 @@ def translate(
 
     rprint(f"[bold]Translation pipeline: {src_lang} → {tgt_lang}[/bold]")
     rprint(f"  Source locale: {src_locale} (archive prefix: lang_{locale_code})")
-    logger.info("Translation pipeline: %s -> %s, locale=%s, model=%s",
-                src_lang, tgt_lang, src_locale, effective_model)
+    logger.info("Translation pipeline: %s -> %s, locale=%s, model=%s, batch_size=%d",
+                src_lang, tgt_lang, src_locale, effective_model, effective_batch_size)
+    logger.info("Config: game_dir=%s, work_dir=%s, output_dir=%s",
+                config.game_dir, config.work_dir, config.output_dir)
 
     # Step 1: Extract source locale archives
     if skip_extract:
         rprint("[yellow]Skipping extraction (using existing files)[/yellow]")
+        logger.info("Step 1: Skipping extraction (--skip-extract)")
         extract_dir = config.work_dir / "extracted"
         if not extract_dir.exists():
+            logger.error("Extracted directory not found: %s", extract_dir)
             rprint("[red]Error: extracted directory not found. Run without --skip-extract first.[/red]")
             raise typer.Exit(1)
     else:
         try:
             validate_tool_paths(config)
         except FileNotFoundError as e:
+            logger.error("Tool path validation failed: %s", e)
             rprint(f"[red]Error:[/red] {e}")
             raise typer.Exit(1)
 
         rprint(f"[bold]Step 1: Extracting {src_lang} locale archives...[/bold]")
+        logger.info("Step 1: Extracting %s locale archives (code=%s, dir=%s)",
+                     src_lang, locale_code, src_locale)
         extract_dir = extract_locale_archives(config, locale_code, src_locale)
 
     # Collect locale JSONs
     json_files = collect_locale_jsons(extract_dir, src_locale)
     rprint(f"  Found {len(json_files)} locale file(s)")
+    logger.info("Collected %d locale JSON file(s) from %s", len(json_files), extract_dir)
 
     if not json_files:
+        logger.error("No locale files found for '%s' in %s", src_locale, extract_dir)
         rprint(f"[red]No locale files found for '{src_locale}'. "
                f"Check that the game has the {src_lang} language pack installed.[/red]")
         raise typer.Exit(1)
 
     # Step 2: Extract translatable strings
     rprint("[bold]Step 2: Extracting translatable strings...[/bold]")
+    logger.info("Step 2: Extracting translatable strings from %d file(s)", len(json_files))
     entries = extract_strings(json_files)
     rprint(f"  Extracted {len(entries)} translatable string(s)")
+    logger.info("Extracted %d translatable string(s)", len(entries))
 
     if extract_only:
         preview_records = [
@@ -176,41 +186,53 @@ def translate(
             for e in entries
         ]
         write_translation_log(preview_records, log_path)
+        logger.info("Extract-only mode: wrote %d entries to %s", len(entries), log_path)
         rprint(f"[green]Extracted {len(entries)} strings to {log_path}[/green]")
         raise typer.Exit(0)
 
     # Step 3: Translate
     if skip_translate:
         rprint("[yellow]Skipping translation (using existing log)[/yellow]")
+        logger.info("Step 3: Skipping translation (--skip-translate)")
         try:
             records = load_translation_log(log_path)
         except FileNotFoundError:
+            logger.error("Translation log not found at %s", log_path)
             rprint(f"[red]Error: translation log not found at {log_path}[/red]")
             raise typer.Exit(1)
         rprint(f"  Loaded {len(records)} translation(s) from log")
+        logger.info("Loaded %d translation(s) from %s", len(records), log_path)
     else:
         if not effective_api_key:
+            logger.error("No API key provided")
             rprint("[red]Error: No API key provided. Set ANTHROPIC_API_KEY env var, "
                    "pass --api-key, or set api_key in config.toml [translation].[/red]")
             raise typer.Exit(1)
 
         rprint(f"[bold]Step 3: Translating {len(entries)} strings ({src_lang} → {tgt_lang})...[/bold]")
+        logger.info("Step 3: Translating %d strings (%s -> %s, model=%s, batch_size=%d)",
+                     len(entries), src_lang, tgt_lang, effective_model, effective_batch_size)
         records = translate_strings(
             entries, src_lang, tgt_lang,
             effective_api_key, effective_model, effective_batch_size,
             resume_log=log_path,
         )
         write_translation_log(records, log_path)
+        logger.info("Translation complete: %d record(s) saved to %s", len(records), log_path)
         rprint(f"  Translation log saved to {log_path}")
 
     # Step 4: Apply translations to JSON files
     rprint("[bold]Step 4: Applying translations to locale files...[/bold]")
+    logger.info("Step 4: Applying %d translation(s) to %d locale file(s)",
+                len(records), len(json_files))
     updated = apply_translations(json_files, records)
     rprint(f"  Updated {updated} string(s) in locale files")
+    logger.info("Applied translations: %d string(s) updated", updated)
 
     if skip_repack:
         rprint("[yellow]Skipping repack.[/yellow]")
         elapsed = time.time() - pipeline_start
+        logger.info("Skipping repack (--skip-repack). Pipeline finished in %.1fs", elapsed)
         rprint(f"[green bold]Translation complete ({elapsed:.1f}s)[/green bold]")
         raise typer.Exit(0)
 
@@ -218,29 +240,26 @@ def translate(
     try:
         validate_tool_paths(config)
     except FileNotFoundError as e:
+        logger.error("Tool path validation failed before repack: %s", e)
         rprint(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
 
     rprint("[bold]Step 5: Repacking translated archive...[/bold]")
+    logger.info("Step 5: Repacking translated archive")
 
-    # Convert all translated .json.json files back to CR2W
-    modified_files = {Path(r.filepath).resolve() for r in records}
-    convert_json_to_cr2w(config, extract_dir, modified_files)
-
-    # Pack into archive
-    cmd = [str(config.wolvenkit_cli), "pack", "-p", str(extract_dir)]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        rprint(f"[red]WolvenKit pack failed (exit {result.returncode})[/red]")
-        if result.stderr:
-            rprint(f"[dim]{result.stderr.strip()}[/dim]")
+    try:
+        packed_dir = repack_archives(config, records)
+    except (RuntimeError, FileNotFoundError) as e:
+        logger.error("Repack failed: %s", e)
+        rprint(f"[red]Repack failed:[/red] {e}")
         raise typer.Exit(1)
 
-    packed_dir = extract_dir.parent
     archives = list(packed_dir.glob("*.archive"))
     rprint(f"  Repacked {len(archives)} archive(s)")
+    logger.info("Repacked %d archive(s) to %s", len(archives), packed_dir)
 
     elapsed = time.time() - pipeline_start
+    logger.info("Pipeline complete in %.1fs", elapsed)
     rprint(f"[green bold]Done! Translation pipeline complete ({elapsed:.1f}s)[/green bold]")
     rprint(f"  Install the .archive file(s) from {packed_dir} into your game's archive/pc/mod/ directory.")
 

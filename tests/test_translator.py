@@ -180,6 +180,16 @@ class TestParseResponse:
         result = _parse_translation_response(response, 2)
         assert result == ["One", "Two"]
 
+    def test_strips_code_fences_without_newline(self):
+        response = '```["One", "Two"]```'
+        result = _parse_translation_response(response, 2)
+        assert result == ["One", "Two"]
+
+    def test_handles_preamble_text_before_json(self):
+        response = 'Here are the translations:\n["One", "Two"]'
+        result = _parse_translation_response(response, 2)
+        assert result == ["One", "Two"]
+
     def test_raises_on_wrong_count(self):
         response = '["One"]'
         with pytest.raises(ValueError, match="Expected 3"):
@@ -262,6 +272,38 @@ class TestApplyTranslations:
         count = apply_translations([filepath], records)
         assert count == 0
 
+    def test_applies_with_duplicate_secondary_key(self, tmp_path):
+        """Entries sharing secondaryKey but different stringId should not collide."""
+        data = _make_locale_json([
+            {
+                "secondaryKey": "shared_key",
+                "stringId": 1,
+                "femaleVariant": "First line",
+                "maleVariant": "",
+            },
+            {
+                "secondaryKey": "shared_key",
+                "stringId": 2,
+                "femaleVariant": "Second line",
+                "maleVariant": "",
+            },
+        ])
+        filepath = tmp_path / "test.json.json"
+        filepath.write_text(json.dumps(data), encoding="utf-8")
+
+        records = [
+            TranslationRecord(str(filepath), "shared_key", "1", "femaleVariant", "First line", "Translated first"),
+            TranslationRecord(str(filepath), "shared_key", "2", "femaleVariant", "Second line", "Translated second"),
+        ]
+
+        count = apply_translations([filepath], records)
+        assert count == 2
+
+        result = json.loads(filepath.read_text(encoding="utf-8"))
+        entries = result["Data"]["RootChunk"]["root"]["Data"]["entries"]
+        assert entries[0]["femaleVariant"] == "Translated first"
+        assert entries[1]["femaleVariant"] == "Translated second"
+
     def test_applies_multiple_translations(self, tmp_path):
         data = _make_locale_json([
             {
@@ -321,6 +363,42 @@ class TestTranslationLog:
         assert loaded[0].source_text == "Merhaba"
         assert loaded[0].translated_text == "Salam"
         assert loaded[1].string_id is None
+
+    def test_round_trip_special_characters(self, tmp_path):
+        """CSV round-trip should preserve commas, quotes, newlines, and non-ASCII."""
+        records = [
+            TranslationRecord(
+                filepath="test.json.json",
+                string_key='key_with,"quotes"',
+                string_id="1",
+                field="femaleVariant",
+                source_text='He said, "Merhaba"\nNew line here',
+                translated_text='Ол айтты, "Сәлем"\nЖаңа жол',
+            ),
+        ]
+        log_path = tmp_path / "translation_log.csv"
+        write_translation_log(records, log_path)
+        loaded = load_translation_log(log_path)
+
+        assert len(loaded) == 1
+        assert loaded[0].string_key == 'key_with,"quotes"'
+        assert loaded[0].translated_text == 'Ол айтты, "Сәлем"\nЖаңа жол'
+
+    def test_round_trip_with_bom(self, tmp_path):
+        """CSV files saved with a BOM (e.g. by Excel) should load correctly."""
+        records = [
+            TranslationRecord("f.json", "k", "1", "femaleVariant", "src", "tgt"),
+        ]
+        log_path = tmp_path / "translation_log.csv"
+        write_translation_log(records, log_path)
+
+        # Re-write with BOM prepended (simulating Excel save)
+        content = log_path.read_bytes()
+        log_path.write_bytes(b"\xef\xbb\xbf" + content)
+
+        loaded = load_translation_log(log_path)
+        assert len(loaded) == 1
+        assert loaded[0].filepath == "f.json"
 
     def test_load_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):

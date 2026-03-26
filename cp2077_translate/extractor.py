@@ -43,6 +43,8 @@ def find_locale_archives(game_dir: Path, locale_code: str = "en") -> list[Path]:
             ]
 
         if found:
+            logger.info("Found %d locale archive(s) in %s: %s",
+                        len(found), label, [a.name for a in found])
             print(f"  Found {len(found)} locale archive(s) in {label}: {archive_dir}")
             archives.extend(found)
 
@@ -72,8 +74,12 @@ def convert_cr2w_to_json(config: Config, extract_dir: Path, locale: str = "en-us
     ]
 
     if not cr2w_files:
+        logger.warning("No CR2W locale files found to convert in %s for locale %s",
+                        extract_dir, locale)
         print("  Warning: no CR2W locale files found to convert.")
         return []
+
+    logger.info("Converting %d CR2W file(s) to JSON (%d workers)", len(cr2w_files), config.workers)
 
     def _convert_one(cr2w_file: Path) -> Path | None:
         expected_output = cr2w_file.parent / (cr2w_file.name + ".json")
@@ -112,6 +118,7 @@ def convert_cr2w_to_json(config: Config, extract_dir: Path, locale: str = "en-us
     if failed_count:
         total = len(cr2w_files)
         pct = (failed_count / total) * 100 if total else 0
+        logger.warning("CR2W conversion: %d/%d failed (%.1f%%)", failed_count, total, pct)
         print(f"  Warning: {failed_count}/{total} CR2W conversion(s) failed ({pct:.1f}%)")
         if pct > 10:
             raise RuntimeError(
@@ -119,6 +126,7 @@ def convert_cr2w_to_json(config: Config, extract_dir: Path, locale: str = "en-us
                 "Check WolvenKit installation and game files."
             )
 
+    logger.info("CR2W conversion complete: %d produced, %d failed", len(produced), failed_count)
     return sorted(produced)
 
 
@@ -138,8 +146,11 @@ def extract_locale_archives(config: Config, locale_code: str, locale_dir: str) -
     extract_dir.mkdir(parents=True, exist_ok=True)
 
     archives = find_locale_archives(config.game_dir, locale_code)
+    logger.info("Unbundling %d archive(s) to %s", len(archives), extract_dir)
+    unbundle_failures = 0
     for archive in archives:
         print(f"  Unbundling: {archive.name}")
+        logger.info("Unbundling: %s", archive)
         cmd = [
             str(config.wolvenkit_cli),
             "unbundle",
@@ -148,12 +159,22 @@ def extract_locale_archives(config: Config, locale_code: str, locale_dir: str) -
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
+            unbundle_failures += 1
             logger.warning("WolvenKit unbundle failed for %s (exit %d): %s",
                            archive.name, result.returncode, (result.stderr or "").strip()[:500])
+
+    if unbundle_failures:
+        logger.warning("Unbundle results: %d/%d failed", unbundle_failures, len(archives))
+    if unbundle_failures == len(archives):
+        raise RuntimeError(
+            f"All {len(archives)} archive(s) failed to unbundle. "
+            "Check that WolvenKit CLI is installed correctly and supports the 'unbundle' command."
+        )
 
     produced = convert_cr2w_to_json(config, extract_dir, locale_dir)
     print(f"  CR2W conversion produced {len(produced)} .json.json file(s)")
     if not produced:
+        logger.warning("No JSON files produced after CR2W conversion")
         print("  Warning: no JSON files were produced -- check WolvenKit output above")
 
     return extract_dir
